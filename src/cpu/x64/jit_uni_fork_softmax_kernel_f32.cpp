@@ -138,10 +138,10 @@ template <cpu_isa_t isa>
 void jit_uni_fork_softmax_kernel_f32<isa>::load_scalar(Xmm xmm_src_, const Xbyak::Address &op) {
     switch (jpp.dt) {
         case data_type::f32:
-            movss(xmm_src_, op);
+            uni_vmovss(xmm_src_, op);
             break;
         case data_type::bf16:
-            pinsrw(xmm_src_, op, 0x0);
+            uni_vpinsrw(xmm_src_, xmm_src_, op, 0x0);
             uni_vpslld(xmm_src_, xmm_src_, 16);
             break;
         default:
@@ -172,14 +172,14 @@ template <cpu_isa_t isa>
 void jit_uni_fork_softmax_kernel_f32<isa>::store_scalar(const Xbyak::Address &op, Xmm xmm_dst_) {
     switch (jpp.dt) {
         case data_type::f32:
-            movss(op, xmm_dst_);
+            uni_vmovss(op, xmm_dst_);
             break;
         case data_type::bf16:
             if (mayiuse(avx512_core_bf16))
                 vcvtneps2bf16(xmm_dst_, xmm_dst_);
             else
                 bf16_emu_->vcvtneps2bf16(xmm_dst_, Ymm(xmm_dst_.getIdx()));
-            pextrw(op, xmm_dst_, 0x0);
+            uni_vpextrw(op, xmm_dst_, 0x0);
             break;
         default:
             assert(!"unknown dst_dt");
@@ -262,49 +262,49 @@ void jit_uni_fork_softmax_kernel_f32<isa>::simd_expf(const Vmm &vmm_src) {
 
 template <cpu_isa_t isa>
 void jit_uni_fork_softmax_kernel_f32<isa>::scalar_expf(const Xmm &xmm_src) {
-    minss(xmm_src, ptr[imm_addr64 + 10 * vlen]);
-    maxss(xmm_src, ptr[imm_addr64 + 11 * vlen]);
-    movups(xmm_aux0, xmm_src);
+    uni_vminss(xmm_src, xmm_src, ptr[imm_addr64 + 10 * vlen]);
+    uni_vmaxss(xmm_src, xmm_src, ptr[imm_addr64 + 11 * vlen]);
+    uni_vmovups(xmm_aux0, xmm_src);
     //calculate exp(x)
     // fx = x * log2ef + 0.5
-    mulss(xmm_src, ptr[imm_addr64 + 2 * vlen]);
-    addss(xmm_src, ptr[imm_addr64 + 1 * vlen]);
+    uni_vmulss(xmm_src, xmm_src, ptr[imm_addr64 + 2 * vlen]);
+    uni_vaddss(xmm_src, xmm_src, ptr[imm_addr64 + 1 * vlen]);
     // tmp = floorf(fx)
-    roundss(xmm_aux1, xmm_src, _op_floor);
+    uni_vroundss(xmm_aux1, xmm_src, _op_floor);
     //keep fx for further computations
-    movups(xmm_src, xmm_aux1); //xmm_src = fx
+    uni_vmovups(xmm_src, xmm_aux1); //xmm_src = fx
     // compute 2^n
-    cvtps2dq(xmm_aux2, xmm_src);
-    paddd(xmm_aux2, ptr[imm_addr64 + 4 * vlen]);
-    pslld(xmm_aux2, 23); //Xmm(6) = 2^-fx
+    uni_vcvtps2dq(xmm_aux2, xmm_src);
+    uni_vpaddd(xmm_aux2, xmm_aux2, ptr[imm_addr64 + 4 * vlen]);
+    uni_vpslld(xmm_aux2, xmm_aux2, 23); //Xmm(6) = 2^-fx
 
     //calculation fx * ln2
-    mulss(xmm_aux1, ptr[imm_addr64 + 3 * vlen]);
+    uni_vmulss(xmm_aux1, xmm_aux1, ptr[imm_addr64 + 3 * vlen]);
     //x = x - fx * ln2
-    subss(xmm_aux0, xmm_aux1);
+    uni_vsubss(xmm_aux0, xmm_aux0, xmm_aux1);
     // y = p5
-    movups(xmm_src, ptr[imm_addr64 + 9 * vlen]);
+    uni_vmovups(xmm_src, ptr[imm_addr64 + 9 * vlen]);
     // y = y * x + p4
-    mulss(xmm_src, xmm_aux0);
-    addss(xmm_src, ptr[imm_addr64 + 8 * vlen]);
+    uni_vmulss(xmm_src, xmm_src, xmm_aux0);
+    uni_vaddss(xmm_src, xmm_src, ptr[imm_addr64 + 8 * vlen]);
 
     // y = y * x + p3
-    mulss(xmm_src, xmm_aux0);
-    addss(xmm_src, ptr[imm_addr64 + 7 * vlen]);
+    uni_vmulss(xmm_src, xmm_src, xmm_aux0);
+    uni_vaddss(xmm_src, xmm_src, ptr[imm_addr64 + 7 * vlen]);
     // y = y * x + p2
-    mulss(xmm_src, xmm_aux0);
-    addss(xmm_src, ptr[imm_addr64 + 6 * vlen]);
+    uni_vmulss(xmm_src, xmm_src, xmm_aux0);
+    uni_vaddss(xmm_src, xmm_src, ptr[imm_addr64 + 6 * vlen]);
 
     // y = y * x + p1
-    mulss(xmm_src, xmm_aux0);
-    addss(xmm_src, xmm_one);
+    uni_vmulss(xmm_src, xmm_src, xmm_aux0);
+    uni_vaddss(xmm_src, xmm_src, xmm_one);
 
     // y = y * x + p0
-    mulss(xmm_src, xmm_aux0);
-    addss(xmm_src, ptr[imm_addr64 + 5 * vlen]); //exp(q)
+    uni_vmulss(xmm_src, xmm_src, xmm_aux0);
+    uni_vaddss(xmm_src, xmm_src, ptr[imm_addr64 + 5 * vlen]); //exp(q)
 
     // y = y * 2^n
-    mulps(xmm_src, xmm_aux2);
+    uni_vmulps(xmm_src, xmm_src, xmm_aux2);
 }
 
 template <cpu_isa_t isa>
@@ -479,7 +479,7 @@ void jit_uni_fork_softmax_kernel_f32<isa>::scalar_loop_max() {
     Label loop_channel_tail;
     Label loop_channel_end;
 
-    movups(xmm_max, xmm_float_min);
+    uni_vmovups(xmm_max, xmm_float_min);
     mov(reg_src_ptr, reg_src_base_ptr);
     mov(reg_ch_work, reg_channels);
 
@@ -488,7 +488,7 @@ void jit_uni_fork_softmax_kernel_f32<isa>::scalar_loop_max() {
         jle(loop_channel_end, T_NEAR);
 
         load_scalar(xmm_src, ptr[reg_src_ptr]);
-        maxss(xmm_max, xmm_src);
+        uni_vmaxss(xmm_max, xmm_max, xmm_src);
 
         add(reg_src_ptr, jpp.inner_size * jpp.dt_size);
 
@@ -509,16 +509,16 @@ void jit_uni_fork_softmax_kernel_f32<isa>::scalar_loop_exp() {
 
     mov(reg_ch_work, reg_channels);
 
-    pxor(xmm_denom, xmm_denom);
+    uni_vpxor(xmm_denom, xmm_denom, xmm_denom);
 
     L(loop_channel_tail); {
         cmp(reg_ch_work, 0);
         jle(loop_channel_end, T_NEAR);
 
         load_scalar(xmm_src, ptr[reg_src_ptr]);
-        subss(xmm_src, xmm_max);
+        uni_vsubss(xmm_src, xmm_src, xmm_max);
         scalar_expf(xmm_src);
-        addss(xmm_denom, xmm_src);
+        uni_vaddss(xmm_denom, xmm_denom, xmm_src);
         store_scalar(ptr[reg_dst_ptr], xmm_src);
 
         add(reg_src_ptr, jpp.inner_size * jpp.dt_size);
@@ -545,7 +545,7 @@ void jit_uni_fork_softmax_kernel_f32<isa>::scalar_loop_div() {
         jle(loop_channel_end, T_NEAR);
 
         load_scalar(xmm_src, ptr[reg_dst_ptr]);
-        divss(xmm_src, xmm_denom);
+        uni_vdivss(xmm_src, xmm_src, xmm_denom);
         store_scalar(ptr[reg_dst_ptr], xmm_src);
 
         add(reg_src_ptr, jpp.inner_size * jpp.dt_size);
@@ -561,15 +561,15 @@ void jit_uni_fork_softmax_kernel_f32<isa>::scalar_loop_div() {
 template <cpu_isa_t isa>
 void jit_uni_fork_softmax_kernel_f32<isa>::dense_loop(int ou_block) {
     for (int ou = 0; ou < ou_block; ou++) {
-        movups(xmm_max, xmm_float_min);
+        uni_vmovups(xmm_max, xmm_float_min);
         for (int ch = 0; ch < (int)jpp.channels; ch++) {
             load_scalar(xmm_src, ptr[reg_src_base_ptr + (ou * jpp.channels + ch) * jpp.dt_size]);
-            maxss(xmm_max, xmm_src);
+            uni_vmaxss(xmm_max, xmm_max, xmm_src);
         }
 
         for (int ch = 0; ch < (int)jpp.channels; ch++) {
             load_scalar(xmm_src, ptr[reg_src_base_ptr + (ou * jpp.channels + ch) * jpp.dt_size]);
-            subss(xmm_src, xmm_max);
+            uni_vsubss(xmm_src, xmm_src, xmm_max);
             store_scalar(ptr[reg_dst_base_ptr + (ou * jpp.channels + ch) * jpp.dt_size], xmm_src);
         }
     }
@@ -589,18 +589,18 @@ void jit_uni_fork_softmax_kernel_f32<isa>::dense_loop(int ou_block) {
     }
 
     for (int ou = 0; ou < ou_block; ou++) {
-        pxor(xmm_denom, xmm_denom);
+        uni_vpxor(xmm_denom, xmm_denom, xmm_denom);
         for (int ch = 0; ch < (int)jpp.channels; ch++) {
             load_scalar(xmm_src, ptr[reg_dst_base_ptr + (ou * jpp.channels + ch) * jpp.dt_size]);
-            addss(xmm_denom, xmm_src);
+            uni_vaddss(xmm_denom, xmm_denom, xmm_src);
         }
 
-        movss(xmm_one, ptr[imm_addr64 + 0 * vlen]);
-        divss(xmm_one, xmm_denom);
-        movss(xmm_denom, xmm_one);
+        uni_vmovss(xmm_one, ptr[imm_addr64 + 0 * vlen]);
+        uni_vdivss(xmm_one, xmm_one, xmm_denom);
+        uni_vmovss(xmm_denom, xmm_one);
         for (int ch = 0; ch < (int)jpp.channels; ch++) {
             load_scalar(xmm_src, ptr[reg_dst_base_ptr + (ou * jpp.channels + ch) * jpp.dt_size]);
-            mulss(xmm_src, xmm_denom);
+            uni_vmulss(xmm_src, xmm_src, xmm_denom);
             store_scalar(ptr[reg_dst_base_ptr + (ou * jpp.channels + ch) * jpp.dt_size], xmm_src);
         }
     }
@@ -620,7 +620,7 @@ void jit_uni_fork_softmax_kernel_f32<isa>::generate() {
         mov(reg_channels, ptr[abi_param1 + GET_OFF(channels)]);
 
         mov(reg_min, float2int(-FLT_MAX));
-        movq(xmm_float_min, reg_min);
+        uni_vmovq(xmm_float_min, reg_min);
 
         mov(imm_addr64, jit_uni_fork_softmax_kernel_f32<isa>::l_table);
         uni_vmovups(vmm_one, ptr[imm_addr64 + 0 * vlen]);
@@ -689,7 +689,7 @@ void jit_uni_fork_softmax_kernel_f32<isa>::generate_dense() {
     mov(reg_work_amount, ptr[abi_param1 + GET_OFF(work)]);
 
     mov(reg_min, float2int(-FLT_MAX));
-    movq(xmm_float_min, reg_min);
+    uni_vmovq(xmm_float_min, reg_min);
 
     mov(imm_addr64, jit_uni_fork_softmax_kernel_f32<isa>::l_table);
     uni_vmovups(vmm_one, ptr[imm_addr64 + 0 * vlen]);

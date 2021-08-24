@@ -1239,7 +1239,7 @@ void jit_uni_i8i8_pooling_fwd_ker_t<isa>::init_tmp_reg() {
             else if (mayiuse(avx2))
                 vpbroadcastb(vreg_tmp, xmm_tmp);
             else
-                pshufb(xmm_tmp, vreg_zeros);
+                uni_vpshufb(xmm_tmp, xmm_tmp, vreg_zeros);
             break;
         default: assert(!"unsupported pooling algorithm");
     }
