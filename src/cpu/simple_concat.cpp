@@ -20,6 +20,12 @@
 
 #include "cpu/simple_concat.hpp"
 
+#include <iostream>
+
+#define PRAGMA_EXEC
+// #define COPY_EXEC
+// #define NEW_PARALLEL
+
 namespace dnnl {
 namespace impl {
 namespace cpu {
@@ -39,11 +45,12 @@ status_t simple_concat_t<data_type>::execute(const exec_ctx_t &ctx) const {
     const int concat_dim = pd()->concat_dim();
     auto o_base_ptr = CTX_OUT_MEM(data_t *, DNNL_ARG_DST);
     if (o_base_ptr == nullptr) return status::success;
-
+    std::cout << "out ptr simple_concat_t: " << o_base_ptr << std::endl;
     for (int a = 0; a < num_arrs; ++a) {
         const memory_desc_wrapper i_d(pd()->src_md(a));
         const memory_desc_wrapper o_d(pd()->src_image_md(a));
         const auto iptr = CTX_IN_MEM(const data_t *, DNNL_ARG_MULTIPLE_SRC + a);
+        std::cout << a << " in ptr simple_concat_t: " << iptr << std::endl;
         if (iptr == nullptr) {
             iptrs[a] = nullptr;
             nelems_to_copy[a] = 0;
@@ -58,6 +65,12 @@ status_t simple_concat_t<data_type>::execute(const exec_ctx_t &ctx) const {
             else
                 is[a][i] = 0;
         }
+        std::cout << "in offset: " << i_d.blk_off(0) << " img offset: " << o_d.blk_off(0) << std::endl;
+        std::cout << "istrides" << std::endl;
+        for (int i = 0; i < DNNL_MAX_NDIMS; i++) {
+            std::cout << is[a][i] << " ";
+        }
+        std::cout << std::endl;
     }
 
     const memory_desc_wrapper o_d(pd()->dst_md(0));
@@ -70,6 +83,11 @@ status_t simple_concat_t<data_type>::execute(const exec_ctx_t &ctx) const {
         // should be taken into account for this condition.
         if (o_d.padded_dims()[iperm[i]] != 1) has_outer_loop = true;
     }
+    std::cout << "ostrides" << std::endl;
+    for (int i = 0; i < DNNL_MAX_NDIMS; i++) {
+        std::cout << os[i] << " ";
+    }
+    std::cout << std::endl;
 
     // Applies when concat axis is the outermost dimension, e.g. concat_axis = 0
     // or concat_axis = 1, and dims[0] = 1;
@@ -77,7 +95,11 @@ status_t simple_concat_t<data_type>::execute(const exec_ctx_t &ctx) const {
         for (int a = 0; a < num_arrs; ++a) {
             const data_t *i = &iptrs[a][0];
             data_t *o = &optrs[a][0];
+            #ifdef NEW_PARALLEL
+            parallel_nd(nelems_to_copy[a], [&](dim_t e) { o[e] = i[e]; });
+            #else
             parallel_nd_legacy(nelems_to_copy[a], [&](dim_t e) { o[e] = i[e]; });
+            #endif
         }
         return status::success;
     }
@@ -91,10 +113,23 @@ status_t simple_concat_t<data_type>::execute(const exec_ctx_t &ctx) const {
             phys_dims[i] = 1;
     }
 
-    const auto L1_size = platform::get_per_core_cache_size(1);
+    std::cout << "phys_dims" << std::endl;
+    for (int i = 0; i < DNNL_MAX_NDIMS; i++) {
+        std::cout << phys_dims[i] << " ";
+    }
+    std::cout << std::endl;
+
+    #ifdef NEW_PARALLEL
+    std::cout << "NEW_PARALLEL" << std::endl;
+    parallel_nd(phys_dims[0], phys_dims[1], phys_dims[2], phys_dims[3],
+    #else
+    std::cout << "LEGACY_PARALLEL" << std::endl;
     parallel_nd_legacy(phys_dims[0], phys_dims[1], phys_dims[2], phys_dims[3],
+    #endif
             phys_dims[4], num_arrs,
             [&](dim_t n0, dim_t n1, dim_t n2, dim_t n3, dim_t n4, dim_t a) {
+                std::cout << "================= concat parallel start =================" << std::endl;
+                std::cout << n0 << " " << n1 << " " << n2 << " " << n3 << " " << n4 << " num in: " << a << std::endl;
                 // check if zero memory
                 if (iptrs[a] == nullptr) return;
 
@@ -107,50 +142,26 @@ status_t simple_concat_t<data_type>::execute(const exec_ctx_t &ctx) const {
                         + os[3] * n3 + os[4] * n4;
                 const data_t *i = &iptrs[a][in_off];
                 data_t *o = &optrs[a][out_off];
-
-#if defined(__GNUC__)
-                // Heuristic:
-                // memcpy works generally faster for data sizes not
-                // exceeding L1 cache.
-                if (nelems_to_copy[a] * sizeof(data_t) > L1_size) {
-                    // The code below performs data copying: o[e] = i[e]
-                    // and uses a workaround to make GNU compilers optimize it
-                    uint8_t *ptro = reinterpret_cast<uint8_t *>(o);
-                    const uint8_t *ptri = reinterpret_cast<const uint8_t *>(i);
-
-                    const size_t head_part = sizeof(uint32_t)
-                            - reinterpret_cast<uint64_t>(ptro)
-                                    % sizeof(uint32_t);
-                    const size_t main_part
-                            = (nelems_to_copy[a] - head_part / sizeof(data_t))
-                            * sizeof(data_t) / sizeof(uint32_t);
-                    const size_t tail_part
-                            = (nelems_to_copy[a] * sizeof(data_t)) - head_part
-                            - (main_part * sizeof(uint32_t));
-                    for (size_t e = 0; e < head_part; ++e) {
-                        *ptro = *ptri;
-                        ++ptro;
-                        ++ptri;
-                    }
-                    PRAGMA_OMP_SIMD()
-                    for (size_t e = 0; e < main_part; ++e) {
-                        *(reinterpret_cast<uint32_t *>(ptro))
-                                = *(reinterpret_cast<const uint32_t *>(ptri));
-                        ptro += sizeof(uint32_t);
-                        ptri += sizeof(uint32_t);
-                    }
-                    for (size_t e = 0; e < tail_part; ++e) {
-                        *ptro = *ptri;
-                        ++ptro;
-                        ++ptri;
-                    }
-                } else {
-                    std::memcpy(o, i, nelems_to_copy[a] * sizeof(data_t));
-                }
-#else
+                std::cout << "in_off: " << in_off << " out_off: " << out_off << " nelems_to_copy: " << nelems_to_copy[a] << std::endl;
+                std::cout << "ptr_diff in: " << (o - o_base_ptr) << " ptr_diff out: " << (i - CTX_IN_MEM(const data_t *, DNNL_ARG_MULTIPLE_SRC + a)) << std::endl;
+                #ifdef PRAGMA_EXEC
+                std::cout << "PRAGMA_EXEC" << std::endl;
                 PRAGMA_OMP_SIMD()
-                for (dim_t e = 0; e < nelems_to_copy[a]; ++e) o[e] = i[e];
-#endif
+                for (dim_t e = 0; e < nelems_to_copy[a]; ++e) {
+                    o[e] = i[e];
+                }
+                #elif defined(COPY_EXEC)
+                std::cout << "COPY_EXEC" << std::endl;
+                for (dim_t e = 0; e < nelems_to_copy[a]; ++e) {
+                    o[e] = i[e];
+                }
+                #else
+                std::cout << "MEMCPY" << std::endl;
+                std::memcpy(o, i, nelems_to_copy[a] * sizeof(data_t));
+                #endif
+
+                std::cout << "DATA: " << o[nelems_to_copy[a] - 1] << " " <<  i[nelems_to_copy[a] - 1] << std::endl;
+                std::cout << "================= concat parallel end =================" << std::endl;
             });
 
     return status::success;

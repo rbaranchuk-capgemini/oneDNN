@@ -20,6 +20,8 @@
 #include "cpu/ref_concat.hpp"
 #include "cpu/simple_concat.hpp"
 
+// #define DISABLE_SIMLE_CONCAT
+
 namespace dnnl {
 namespace impl {
 namespace cpu {
@@ -32,11 +34,13 @@ using namespace dnnl::impl::data_type;
 #define INSTANCE(...) DNNL_PRIMITIVE_IMPL(INSTANCE_IMPL, __VA_ARGS__)
 // clang-format off
 const impl_list_item_t cpu_concat_impl_list[] = {
+        #ifndef DISABLE_SIMLE_CONCAT
         REG_CONCAT_P(INSTANCE(simple_concat_t, f32))
         REG_CONCAT_P(INSTANCE(simple_concat_t, u8))
         REG_CONCAT_P(INSTANCE(simple_concat_t, s8))
         REG_CONCAT_P(INSTANCE(simple_concat_t, s32))
         REG_CONCAT_P(INSTANCE(simple_concat_t, bf16))
+        #endif
         REG_CONCAT_P(INSTANCE(ref_concat_t))
         nullptr,
 };
