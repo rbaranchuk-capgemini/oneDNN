@@ -20,6 +20,8 @@
 
 #include "cpu/simple_concat.hpp"
 
+#include <iostream>
+
 namespace dnnl {
 namespace impl {
 namespace cpu {
@@ -109,6 +111,7 @@ status_t simple_concat_t<data_type>::execute(const exec_ctx_t &ctx) const {
                 data_t *o = &optrs[a][out_off];
 
 #if defined(__GNUC__)
+                std::cout << "IF BRANCH" << std::endl;
                 // Heuristic:
                 // memcpy works generally faster for data sizes not
                 // exceeding L1 cache.
@@ -147,7 +150,22 @@ status_t simple_concat_t<data_type>::execute(const exec_ctx_t &ctx) const {
                 } else {
                     std::memcpy(o, i, nelems_to_copy[a] * sizeof(data_t));
                 }
+#elif defined _MSC_VER
+                std::cout << "MSVC MEMCPY: " << o << " " << i << " " << nelems_to_copy[a] << " " << sizeof(data_t) << std::endl;
+                std::memcpy(o, i, nelems_to_copy[a] * sizeof(data_t));
+
+                // std::cout << "MSVC SIMD CYCLE COPY: " << o << " " << i << " " << nelems_to_copy[a] << std::endl;
+                // PRAGMA_OMP_SIMD()
+                // for (dim_t e = 0; e < nelems_to_copy[a]; ++e) {
+                //     o[e] = i[e];
+                // }
+
+                // std::cout << "MSVC CYCLE COPY: " << o << " " << i << " " << nelems_to_copy[a] << std::endl;
+                // for (dim_t e = 0; e < nelems_to_copy[a]; ++e) {
+                //     o[e] = i[e];
+                // }
 #else
+                std::cout << "ELSE BRANCH" << std::endl;
                 PRAGMA_OMP_SIMD()
                 for (dim_t e = 0; e < nelems_to_copy[a]; ++e) o[e] = i[e];
 #endif
