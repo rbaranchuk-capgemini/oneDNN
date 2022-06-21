@@ -1013,6 +1013,7 @@ void jit_avx2_conv_bwd_data_kernel_f32::compute_loop(
         int depthwise_inj_idx = 0;
         for (int ii = 0; ii < nb_ic_block; ii++) {
             for (int jj = 0; jj < ur_w; jj++) {
+                const auto idx = ur_w * ii + jj;
                 if (is_tail && ii == nb_ic_block - 1)
                     load_bytes(Ymm(15), reg_dsrc, get_dsrc_offset(ii, jj),
                             ic_tail * sizeof(float));
@@ -1028,8 +1029,8 @@ void jit_avx2_conv_bwd_data_kernel_f32::compute_loop(
                         mov(reg_d_weights, ptr[this->rsp + base_post_ops_data_offset + post_ops_data_offset]);
                         add(reg_d_weights, ptr[this->param1 + GET_OFF(ic_off)]);
                         add(reg_d_weights, jcp.ic_block * ii * sizeof(float));
-                        const auto weights_off = post_op.depthwise.offset[post_op.depthwise.scales] * sizeof(float);
-                        uni_vmulps(Ymm(ur_w * ii + jj), Ymm(ur_w * ii + jj), ptr[reg_d_weights +  weights_off]);
+                        depthwise_injectors[depthwise_inj_idx]->compute_vector_range(
+                                idx, idx + 1, reg_d_weights, reg_d_weights, false, true);
 
                         post_ops_data_offset += depthwise_injectors[depthwise_inj_idx]->memoryStep();
                         depthwise_inj_idx++;

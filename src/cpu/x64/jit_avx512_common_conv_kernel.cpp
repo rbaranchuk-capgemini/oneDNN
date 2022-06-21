@@ -1338,7 +1338,8 @@ void _jit_avx512_common_conv_bwd_data_kernel_f32<Vmm>::store_output(int ur_w) {
 
     for (int k = 0; k < jcp.nb_ic_blocking; k++) {
         for (int j = 0; j < ur_w; j++) {
-            Vmm vmm = vmm_out(j, k);
+            const auto idx = j + k * jcp.ur_w;
+            assert(idx < ker_reg_base_idx);
             size_t aux_src_offset = get_diff_src_offset(j, k);
             post_ops_data_offset = 0;
             depthwise_inj_idx = 0;
@@ -1349,15 +1350,15 @@ void _jit_avx512_common_conv_bwd_data_kernel_f32<Vmm>::store_output(int ur_w) {
                     mov(reg_d_weights, ptr[this->rsp + base_post_ops_data_offset + post_ops_data_offset]);
                     add(reg_d_weights, ptr[this->param1 + GET_OFF(oc_off)]);
                     add(reg_d_weights, jcp.ic_block * k * sizeof(float));
-                    const auto weights_off = post_op.depthwise.offset[post_op.depthwise.scales] * sizeof(float);
-                    uni_vmulps(vmm, vmm, ptr[reg_d_weights +  weights_off]);
+
+                    depthwise_injectors[depthwise_inj_idx]->compute_vector_range(
+                        idx, idx + 1, reg_d_weights, reg_d_weights, false, true);
 
                     post_ops_data_offset += depthwise_injectors[depthwise_inj_idx]->memoryStep();
                     depthwise_inj_idx++;
                 }
             }
-
-            vaddps(vmm,
+            vaddps(Vmm(idx),
             EVEX_compress_addr_safe(
                                 reg_src, aux_src_offset, reg_long_offt));
         }
